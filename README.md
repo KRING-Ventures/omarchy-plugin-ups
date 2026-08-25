@@ -58,6 +58,71 @@ over two minutes — during which the shell counts the poller as still running a
 skips every later poll. Truncated replies (a list with no terminator) are
 reported as errors rather than parsed as if complete.
 
+## Auto-shutdown (opt-in)
+
+Shut the machine down cleanly, or hibernate it, before the UPS battery runs out.
+**Disabled by default** and it must be turned on explicitly.
+
+> **Read this first.** This runs inside the Omarchy shell, which is a user
+> session process. It is therefore *not* running when you most need it: machine
+> asleep, logged out, session crashed, or this plugin itself erroring. For an
+> unattended outage, use NUT's own `upsmon` — a system daemon that runs as root,
+> survives logout, and executes `SHUTDOWNCMD` on `LB`/`FSD`. Treat this feature
+> as the visible, cancellable convenience layer, not as your safety net.
+
+```json
+{
+  "id": "omarchy-community.ups",
+  "host": "192.168.1.50",
+  "autoShutdown": {
+    "enabled": true,
+    "action": "shutdown",
+    "runtimeBelow": 300,
+    "confirmPolls": 2,
+    "graceSeconds": 60
+  }
+}
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `false` | Must be `true` for any of this to happen |
+| `action` | `shutdown` | `shutdown` or `hibernate` |
+| `command` | `""` | Run this instead of `systemctl`. Also how you test the feature without powering the machine off |
+| `runtimeBelow` | `300` | Act at or below this many seconds of remaining runtime. `0` disables this trigger |
+| `chargeBelow` | `0` | Act at or below this battery percentage. `0` disables this trigger |
+| `onLowBattery` | `true` | Also act on the UPS's own `LB` flag, whatever the numbers say |
+| `confirmPolls` | `2` | Consecutive agreeing polls required before arming |
+| `graceSeconds` | `60` | Cancellable countdown. `0` acts immediately |
+
+The UPS's `FSD` flag (upsd explicitly commanding shutdown) always triggers,
+regardless of the thresholds.
+
+**Behaviour**
+
+- Only ever arms while the UPS is reachable *and* running on battery.
+- `confirmPolls` exists because a single spurious `battery.runtime` of 0 must
+  never power the machine off. The count resets the moment a reading disagrees.
+- While armed, the bar shows a warning glyph and a live countdown, and warnings
+  are re-sent at 30s and 10s so a screen that was locked when it armed still
+  shows something.
+- Mains power returning cancels an in-progress countdown and re-arms for a
+  future outage.
+- Cancel by hand with
+  `omarchy-shell omarchy-community.ups cancelShutdown`. That suppresses
+  auto-shutdown until mains power returns — otherwise the trigger is still true
+  on the next poll and the countdown just starts again. Undo with
+  `resumeAutoShutdown`.
+- Inspect the state machine any time with
+  `omarchy-shell omarchy-community.ups shutdownStatus`.
+- `action: "hibernate"` is resolved against what logind actually reports for
+  `CanHibernate`. On a machine that cannot hibernate (no swap large enough, no
+  `resume=`) it powers off instead and says so, rather than silently doing
+  nothing.
+- If upsd becomes unreachable *while a countdown is already running*, the
+  countdown continues. A network blip and a dead UPS are indistinguishable from
+  here, and shutting down cleanly is the safer of the two mistakes.
+
 ## Settings
 
 Set these on the widget's entry in `~/.config/omarchy/shell.json`:

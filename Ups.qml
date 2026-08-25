@@ -32,6 +32,11 @@ BarWidget {
     ""  // full
   ]
 
+  function fmtCountdown(seconds) {
+    var s = Math.max(0, seconds)
+    return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + (s % 60)
+  }
+
   function batteryGlyph() {
     var charge = service.charge
     if (charge < 0) return batteryGlyphs[0]
@@ -43,6 +48,7 @@ BarWidget {
   }
 
   readonly property string glyph: {
+    if (ready && service.shutdownArmed) return glyphWarn
     if (!reachable) return glyphOffline
     if (service.lowBattery || service.replaceBattery || service.shutdownPending) return glyphWarn
     if (service.onBattery) return batteryGlyph()
@@ -50,6 +56,7 @@ BarWidget {
   }
 
   readonly property string metricText: {
+    if (ready && service.shutdownArmed) return fmtCountdown(service.shutdownRemaining)
     if (!reachable) return "UPS?"
     if (service.onBattery) return service.fmtRuntime(service.runtime)
     switch (metric) {
@@ -64,6 +71,12 @@ BarWidget {
   readonly property string tooltip: {
     if (!ready) return "UPS: starting up"
     if (!reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText
+
+    if (service.shutdownArmed)
+      return "UPS: " + service.shutdownReason
+        + "\n" + (service.plannedAction() === "hibernate" ? "Hibernating" : "Powering off")
+        + " in " + fmtCountdown(service.shutdownRemaining)
+        + "\nCancel: omarchy-shell omarchy-community.ups cancelShutdown"
 
     var mfr = String(service.value("ups.mfr", "")).trim()
     var model = String(service.value("ups.model", "")).trim().replace(/_/g, " ")
@@ -96,7 +109,7 @@ BarWidget {
     bar: root.bar
     text: root.metricText === "" ? root.glyph : root.glyph + "  " + root.metricText
     fontSize: Style.font.bodySmall
-    active: root.ready && root.service.alarming
+    active: root.ready && (root.service.alarming || root.service.shutdownArmed)
     dimmed: !root.reachable
     tooltipText: root.tooltip
 

@@ -26,6 +26,36 @@ Item {
   readonly property int intervalSeconds: Math.max(2, Number(entryValue("interval", 10)))
   readonly property bool notifyChanges: entryValue("notifications", true) === true
 
+  // ---- Auto-shutdown, opt-in ----
+  // Off by default on purpose: a widget that powers the machine off without
+  // being asked is a footgun. See README for the upsmon caveat.
+  readonly property var shutdownConfig: {
+    var v = entryValue("autoShutdown", null)
+    return v && typeof v === "object" ? v : ({})
+  }
+
+  function shutdownOption(name, fallback) {
+    var v = shutdownConfig[name]
+    return v === undefined || v === null ? fallback : v
+  }
+
+  readonly property bool autoShutdownEnabled: shutdownOption("enabled", false) === true
+  readonly property string shutdownAction: String(shutdownOption("action", "shutdown"))
+  // Escape hatch for a custom action, and what the test harness points at so a
+  // test run cannot power the machine off.
+  readonly property string shutdownCommand: String(shutdownOption("command", ""))
+  // Seconds of remaining runtime at or below which we act. 0 disables.
+  readonly property int shutdownRuntimeBelow: Number(shutdownOption("runtimeBelow", 300))
+  // Battery percent at or below which we act. 0 disables.
+  readonly property int shutdownChargeBelow: Number(shutdownOption("chargeBelow", 0))
+  // Also act on the UPS's own low-battery flag, whatever the numbers say.
+  readonly property bool shutdownOnLowBattery: shutdownOption("onLowBattery", true) === true
+  // Consecutive polls that must agree before arming. Guards against a single
+  // bogus reading (a spurious runtime of 0) powering the machine off.
+  readonly property int shutdownConfirmPolls: Math.max(1, Number(shutdownOption("confirmPolls", 2)))
+  // Cancellable countdown once armed.
+  readonly property int shutdownGraceSeconds: Math.max(0, Number(shutdownOption("graceSeconds", 60)))
+
   // Our own layout entry, wherever the user put the widget.
   function findEntry(cfg) {
     if (!cfg) return null
@@ -63,6 +93,17 @@ Item {
   property string lastAlertClass: ""
   property bool lastReplaceBattery: false
   property bool lastOverloaded: false
+
+  // Auto-shutdown state machine: counting -> armed -> fired.
+  property int shutdownConfirmations: 0
+  property bool shutdownArmed: false
+  property int shutdownRemaining: 0
+  property bool shutdownFired: false
+  // Set by a manual cancel: without it the trigger is still true on the next
+  // poll and the countdown simply starts again a few seconds later, which makes
+  // cancelling by hand useless. Cleared when mains power comes back.
+  property bool shutdownSuppressed: false
+  property string hibernateSupported: "unknown"   // yes | no | unknown
 
   // __sourceDir is the plugin root, which is where the helper lives. Preferred
   // over a relative resolvedUrl so the spawned command has no "../" in it.
@@ -112,6 +153,28 @@ Item {
     if (lowBattery) return "low"
     if (onBattery) return "battery"
     return "ok"
+  }
+
+  // Does the current reading warrant shutting down? Only ever true while we can
+  // actually see the UPS and it is running on battery.
+  readonly property bool shutdownConditionMet: {
+    if (!autoShutdownEnabled || !reachable || !onBattery) return false
+    // FSD is upsd explicitly commanding a shutdown; it is not advisory.
+    if (shutdownPending) return true
+    if (shutdownOnLowBattery && lowBattery) return true
+    if (shutdownRuntimeBelow > 0 && runtime >= 0 && runtime <= shutdownRuntimeBelow) return true
+    if (shutdownChargeBelow > 0 && charge >= 0 && charge <= shutdownChargeBelow) return true
+    return false
+  }
+
+  readonly property string shutdownReason: {
+    if (shutdownPending) return "UPS commanded shutdown"
+    if (shutdownOnLowBattery && lowBattery) return "battery low"
+    if (shutdownRuntimeBelow > 0 && runtime >= 0 && runtime <= shutdownRuntimeBelow)
+      return fmtRuntime(runtime) + " runtime left"
+    if (shutdownChargeBelow > 0 && charge >= 0 && charge <= shutdownChargeBelow)
+      return Math.round(charge) + "% battery left"
+    return "threshold reached"
   }
 
   function value(key, fallback) {
@@ -183,11 +246,168 @@ Item {
     }
   }
 
+  // ---- Auto-shutdown state machine ----
+
+  function evaluateShutdown() {
+    if (!autoShutdownEnabled) {
+      if (shutdownArmed) cancelShutdown("auto-shutdown turned off")
+      shutdownConfirmations = 0
+      return
+    }
+
+    // Mains back: stand down, even mid-countdown, and re-arm for next time.
+    if (reachable && !onBattery) {
+      if (shutdownArmed) cancelShutdown("mains power restored")
+      shutdownConfirmations = 0
+      shutdownFired = false
+      shutdownSuppressed = false
+      return
+    }
+
+    // A manual cancel means "not during this outage".
+    if (shutdownSuppressed) {
+      shutdownConfirmations = 0
+      return
+    }
+
+    // Once the countdown owns the decision, polling stops second-guessing it.
+    // Note this deliberately keeps counting down when upsd becomes unreachable
+    // mid-outage: we cannot tell a network blip from a dead UPS, and shutting
+    // down cleanly is the safer of the two mistakes.
+    if (shutdownArmed || shutdownFired) return
+
+    if (!shutdownConditionMet) {
+      shutdownConfirmations = 0
+      return
+    }
+
+    shutdownConfirmations = shutdownConfirmations + 1
+    if (shutdownConfirmations >= shutdownConfirmPolls) armShutdown()
+  }
+
+  function armShutdown() {
+    if (shutdownArmed || shutdownFired) return
+    shutdownArmed = true
+    shutdownRemaining = shutdownGraceSeconds
+
+    var verb = plannedAction() === "hibernate" ? "Hibernating" : "Shutting down"
+    if (shutdownGraceSeconds <= 0) {
+      notifySend("critical", verb + " now", "UPS: " + shutdownReason)
+      fireShutdown()
+      return
+    }
+    notifySend("critical", verb + " in " + shutdownGraceSeconds + "s",
+               "UPS: " + shutdownReason + ". Cancel: omarchy-shell omarchy-community.ups cancelShutdown")
+    graceTimer.start()
+  }
+
+  // Cancel and stay cancelled until mains power returns.
+  function suppressShutdown() {
+    var was = cancelShutdown("cancelled by hand")
+    shutdownSuppressed = true
+    return was
+  }
+
+  function resumeShutdown() {
+    shutdownSuppressed = false
+    shutdownConfirmations = 0
+  }
+
+  function cancelShutdown(why) {
+    var wasArmed = shutdownArmed
+    shutdownArmed = false
+    shutdownRemaining = 0
+    shutdownConfirmations = 0
+    graceTimer.stop()
+    if (wasArmed) notifySend("normal", "UPS shutdown cancelled", why)
+    return wasArmed
+  }
+
+  // Resolve "hibernate" against what logind says this machine can actually do,
+  // so a box with no swap large enough to hibernate to still shuts down safely
+  // instead of doing nothing.
+  function plannedAction() {
+    if (shutdownCommand !== "") return "command"
+    if (shutdownAction === "hibernate" && hibernateSupported !== "yes") return "shutdown"
+    return shutdownAction === "hibernate" ? "hibernate" : "shutdown"
+  }
+
+  function fireShutdown() {
+    if (shutdownFired) return
+    shutdownFired = true
+    shutdownArmed = false
+    graceTimer.stop()
+
+    var action = plannedAction()
+    if (action === "command") {
+      notifySend("critical", "UPS running shutdown command", shutdownCommand)
+      Quickshell.execDetached(["bash", "-lc", shutdownCommand])
+      return
+    }
+    if (shutdownAction === "hibernate" && action === "shutdown")
+      notifySend("critical", "Hibernation unavailable - powering off instead",
+                 "logind reports hibernate unsupported on this machine.")
+    if (action === "hibernate") Quickshell.execDetached(["systemctl", "hibernate"])
+    else Quickshell.execDetached(["systemctl", "poweroff"])
+  }
+
+  Timer {
+    id: graceTimer
+    interval: 1000
+    repeat: true
+    onTriggered: {
+      root.shutdownRemaining = root.shutdownRemaining - 1
+      // Re-warn on the way down, so a screen that was locked when we armed
+      // still shows something before the machine goes.
+      if (root.shutdownRemaining === 30 || root.shutdownRemaining === 10)
+        root.notifySend("critical", "UPS shutdown in " + root.shutdownRemaining + "s", root.shutdownReason)
+      if (root.shutdownRemaining <= 0) root.fireShutdown()
+    }
+  }
+
+  // One-shot capability probe; "hibernate" is resolved against this at fire time.
+  Process {
+    id: hibernateProbe
+    running: true
+    command: ["busctl", "call", "org.freedesktop.login1", "/org/freedesktop/login1",
+              "org.freedesktop.login1.Manager", "CanHibernate"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.hibernateSupported = String(text || "").indexOf("yes") !== -1 ? "yes" : "no"
+      }
+    }
+  }
+
   IpcHandler {
     target: "omarchy-community.ups"
 
     function refresh(): void {
       root.refresh()
+    }
+
+    function cancelShutdown(): string {
+      var was = root.suppressShutdown()
+      return (was ? "cancelled" : "nothing armed")
+        + "; auto-shutdown suppressed until mains power returns"
+    }
+
+    function resumeAutoShutdown(): string {
+      root.resumeShutdown()
+      return "auto-shutdown re-armed"
+    }
+
+    function shutdownStatus(): string {
+      if (!root.autoShutdownEnabled) return "auto-shutdown disabled"
+      return "action=" + root.plannedAction()
+        + " armed=" + root.shutdownArmed
+        + " remaining=" + root.shutdownRemaining
+        + " confirmations=" + root.shutdownConfirmations + "/" + root.shutdownConfirmPolls
+        + " fired=" + root.shutdownFired
+        + " suppressed=" + root.shutdownSuppressed
+        + " hibernateSupported=" + root.hibernateSupported
+        + " conditionMet=" + root.shutdownConditionMet
+        + (root.shutdownConditionMet ? " reason=" + root.shutdownReason : "")
     }
 
     function status(): string {
@@ -233,6 +453,7 @@ Item {
         root.lastReplaceBattery = root.replaceBattery
         root.lastOverloaded = root.overloaded
         root.primed = true
+        root.evaluateShutdown()
       }
     }
   }
