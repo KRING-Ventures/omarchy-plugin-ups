@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# ups-poll — read a NUT (Network UPS Tools) upsd server over TCP and print its
+# variables as one JSON object. Deliberately pure bash over /dev/tcp so the
+# widget works against any upsd on the network without the `nut` client package
+# installed locally.
+#
+# Usage: ups-poll [host] [port] [upsname]
+#   upsname empty => auto-detect the first UPS the server advertises.
+#
+# Always exits 0 and always prints exactly one JSON object, so the caller only
+# ever parses one shape:
+#   {"ok":true,"name":"...","vars":{...}}
+#   {"ok":false,"error":"..."}
+
+set -uo pipefail
+
+# The deadline guard re-executes this script through `timeout`. The marker is an
+# argv sentinel rather than an environment variable, so an inherited
+# UPS_POLL_GUARDED=1 from any ancestor process cannot silently disable it.
+GUARDED=0
+if [[ ${1:-} == "--guarded-child" ]]; then
+  GUARDED=1
+  shift
+fi
+
+HOST="${1:-127.0.0.1}"
+PORT="${2:-3493}"
+UPS="${3:-}"
+TIMEOUT=4
+
+# Every diagnostic this script produces is returned as JSON on stdout, so bash's
+# own redirection chatter ("connect: Connection refused") is pure noise.
+exec 2>/dev/null
+
+json_escape() {
+  local s=$1 out c i
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  # Raw control characters are not legal inside a JSON string, and a stray
+  # newline would also break this script's one-object-per-line contract.
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  s=${s//$'\b'/\\b}
+  s=${s//$'\f'/\\f}
+  # Whatever else is below 0x20 becomes a \uXXXX escape. (U+0000 cannot occur:
+  # bash variables cannot hold a NUL byte.)
+  if [[ $s == *[$'\x01'-$'\x1f']* ]]; then
+    out=""
+    for (( i = 0; i < ${#s}; i++ )); do
+      c=${s:i:1}
+      if [[ $c == [$'\x01'-$'\x1f'] ]]; then
+        printf -v c '\\u%04x' "'$c"
+      fi
+      out+=$c
+    done
+    s=$out
+  fi
+  printf '%s' "$s"
+}
+
+emit_error() {
+  printf '{"ok":false,"error":"%s"}\n' "$(json_escape "$1")"
+  exit 0
+}
+
+# Bash cannot put a deadline on a /dev/tcp connect. A host that drops SYNs
+# rather than refusing them (powered-off UPS, firewall DROP) would otherwise
+# block here for the kernel's SYN timeout - over two minutes - and the caller
+# counts the poller as still running for that whole time, stalling every later
+# poll. So bound the entire run by re-executing under `timeout`, and still
+# answer with JSON either way.
+DEADLINE=6
+if (( ! GUARDED )); then
+  guarded_output=$(timeout -k 1 "$DEADLINE" bash "$0" --guarded-child "$@")
+  guarded_status=$?
+  if (( guarded_status != 0 )) || [[ -z $guarded_output ]]; then
+    emit_error "timed out after ${DEADLINE}s talking to ${HOST}:${PORT}"
+  fi
+  printf '%s\n' "$guarded_output"
+  exit 0
+fi
+
+# `exec` redirection failure returns non-zero here rather than killing the
+# script (bash outside POSIX mode), so this is a safe reachability probe.
+if ! exec 3<>"/dev/tcp/${HOST}/${PORT}" 2>/dev/null; then
+  emit_error "cannot reach upsd at ${HOST}:${PORT}"
+fi
+
+send() { printf '%s\n' "$1" >&3; }
+
+# Read to the end of the list even once we have what we want: leaving unread
+# lines in the socket would corrupt the next reply we parse.
+if [[ -z $UPS ]]; then
+  send "LIST UPS"
+  list_end=0
+  while IFS= read -r -t "$TIMEOUT" line <&3; do
+    line=${line%$'\r'}
+    case $line in
+      "UPS "*)
+        rest=${line#UPS }
+        [[ -z $UPS ]] && UPS=${rest%% *}
+        ;;
+      "END LIST UPS"*) list_end=1; break ;;
+      "ERR "*) emit_error "upsd: ${line#ERR }" ;;
+    esac
+  done
+  # Both conditions matter: without the terminator the stream is truncated or
+  # desynced, and sending LIST VAR on it would parse the wrong reply.
+  (( list_end )) || emit_error "truncated UPS list from ${HOST}:${PORT}"
+  [[ -n $UPS ]] || emit_error "upsd at ${HOST}:${PORT} lists no UPS"
+fi
+
+send "LIST VAR ${UPS}"
+vars=""
+got_end=0
+while IFS= read -r -t "$TIMEOUT" line <&3; do
+  line=${line%$'\r'}
+  case $line in
+    "VAR "*)
+      rest=${line#VAR }
+      rest=${rest#* }                 # drop the ups name
+      key=${rest%% *}
+      value=${rest#* }
+      value=${value#\"}               # NUT quotes every value
+      value=${value%\"}
+      # Undo NUT's backslash escaping before re-escaping for JSON.
+      value=${value//\\\"/\"}
+      value=${value//\\\\/\\}
+      [[ -n $vars ]] && vars+=","
+      vars+="\"$(json_escape "$key")\":\"$(json_escape "$value")\""
+      ;;
+    "END LIST VAR"*) got_end=1; break ;;
+    "ERR "*) emit_error "upsd: ${line#ERR } (ups=${UPS})" ;;
+  esac
+done
+
+send "LOGOUT" 2>/dev/null || true
+exec 3<&- 2>/dev/null || true
+exec 3>&- 2>/dev/null || true
+
+(( got_end )) || emit_error "timed out reading ${UPS} from ${HOST}:${PORT}"
+
+printf '{"ok":true,"name":"%s","vars":{%s}}\n' "$(json_escape "$UPS")" "$vars"

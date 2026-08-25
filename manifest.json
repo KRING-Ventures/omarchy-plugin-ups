@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "omarchy-community.ups",
+  "name": "UPS",
+  "version": "1.0.0",
+  "author": "KRING Ventures",
+  "description": "UPS status from a NUT (Network UPS Tools) server",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "service/UpsService.qml",
+    "barWidget": "Ups.qml"
+  },
+  "barWidget": {
+    "displayName": "UPS",
+    "description": "Battery, load and runtime for a UPS served by NUT",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
