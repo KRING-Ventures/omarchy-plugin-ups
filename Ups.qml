@@ -32,6 +32,12 @@ BarWidget {
     ""  // full
   ]
 
+  function plannedVerb(action) {
+    if (action === "hibernate") return "Hibernating"
+    if (action === "command") return "Running command"
+    return "Powering off"
+  }
+
   function fmtCountdown(seconds) {
     var s = Math.max(0, seconds)
     return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + (s % 60)
@@ -72,7 +78,7 @@ BarWidget {
     if (!ready) return "UPS: starting up"
     if (service.shutdownArmed)
       return "UPS: " + service.shutdownReason
-        + "\n" + (service.plannedAction() === "hibernate" ? "Hibernating" : "Powering off")
+        + "\n" + plannedVerb(service.plannedAction())
         + " in " + fmtCountdown(service.shutdownRemaining)
         + "\nCancel: omarchy-shell omarchy-community.ups cancelShutdown"
     if (!reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText

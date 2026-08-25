@@ -158,9 +158,14 @@ Item {
   // Does the current reading warrant shutting down? Only ever true while we can
   // actually see the UPS and it is running on battery.
   readonly property bool shutdownConditionMet: {
-    if (!autoShutdownEnabled || !reachable || !onBattery) return false
-    // FSD is upsd explicitly commanding a shutdown; it is not advisory.
+    if (!autoShutdownEnabled || !reachable) return false
+    // FSD is upsd explicitly commanding a shutdown; it is not advisory, and it
+    // is not conditional on line status either. A primary can set FSD while the
+    // UPS still reads OL (an admin running `upsmon -c fsd`, a scheduled or
+    // thermal shutdown), and the host must still go down.
     if (shutdownPending) return true
+    // Everything below infers urgency from the battery, so it needs to be on it.
+    if (!onBattery) return false
     if (shutdownOnLowBattery && lowBattery) return true
     if (shutdownRuntimeBelow > 0 && runtime >= 0 && runtime <= shutdownRuntimeBelow) return true
     if (shutdownChargeBelow > 0 && charge >= 0 && charge <= shutdownChargeBelow) return true
@@ -256,7 +261,9 @@ Item {
     }
 
     // Mains back: stand down, even mid-countdown, and re-arm for next time.
-    if (reachable && !onBattery) {
+    // Not for FSD though: that is a standing order to shut down regardless of
+    // line status, so returning to mains must not cancel it.
+    if (reachable && !onBattery && !shutdownPending) {
       if (shutdownArmed) cancelShutdown("mains power restored")
       shutdownConfirmations = 0
       shutdownFired = false
@@ -300,7 +307,9 @@ Item {
     shutdownArmed = true
     shutdownRemaining = shutdownGraceSeconds
 
-    var verb = plannedAction() === "hibernate" ? "Hibernating" : "Shutting down"
+    var planned = plannedAction()
+    var verb = planned === "hibernate" ? "Hibernating"
+      : planned === "command" ? "Running shutdown command" : "Shutting down"
     if (shutdownGraceSeconds <= 0) {
       notifySend("critical", verb + " now", "UPS: " + shutdownReason)
       fireShutdown()
@@ -338,8 +347,11 @@ Item {
   // instead of doing nothing.
   function plannedAction() {
     if (shutdownCommand !== "") return "command"
-    if (shutdownAction === "hibernate" && hibernateSupported !== "yes") return "shutdown"
-    return shutdownAction === "hibernate" ? "hibernate" : "shutdown"
+    if (shutdownAction !== "hibernate") return "shutdown"
+    // Only a definite "no" downgrades to a power off. While the probe is still
+    // "unknown" the configured intent stands, so we neither mislabel the
+    // pending action nor quietly discard a session that was meant to be saved.
+    return hibernateSupported === "no" ? "shutdown" : "hibernate"
   }
 
   function fireShutdown() {
@@ -348,6 +360,17 @@ Item {
     shutdownArmed = false
     graceTimer.stop()
 
+    // With graceSeconds 0 an FSD arriving at startup can reach this before the
+    // capability probe has answered. Wait for it rather than powering off a
+    // machine that was configured to hibernate; it resolves in milliseconds.
+    if (plannedAction() === "hibernate" && hibernateSupported === "unknown") {
+      capabilityWait.restart()
+      return
+    }
+    performShutdown()
+  }
+
+  function performShutdown() {
     var action = plannedAction()
     if (action === "command") {
       notifySend("critical", "UPS running shutdown command", shutdownCommand)
@@ -359,6 +382,24 @@ Item {
                  "logind reports hibernate unsupported on this machine.")
     if (action === "hibernate") Quickshell.execDetached(["systemctl", "hibernate"])
     else Quickshell.execDetached(["systemctl", "poweroff"])
+  }
+
+  Timer {
+    id: capabilityWait
+    interval: 250
+    repeat: true
+    property int waited: 0
+    onTriggered: {
+      waited += interval
+      // Bounded: if the probe never answers, act rather than never shutting
+      // down. plannedAction() then resolves "unknown" the same way it always
+      // has, so the machine still goes down cleanly.
+      if (root.hibernateSupported !== "unknown" || waited >= 5000) {
+        stop()
+        waited = 0
+        root.performShutdown()
+      }
+    }
   }
 
   Timer {
