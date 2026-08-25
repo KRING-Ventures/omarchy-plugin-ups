@@ -104,6 +104,9 @@ Item {
   // cancelling by hand useless. Cleared when mains power comes back.
   property bool shutdownSuppressed: false
   property string hibernateSupported: "unknown"   // yes | no | unknown
+  // Distinct from a confirmed "no": logind never answered. Both fall back to a
+  // power off, but they are different situations and say so.
+  property bool hibernateProbeTimedOut: false
 
   // __sourceDir is the plugin root, which is where the helper lives. Preferred
   // over a relative resolvedUrl so the spawned command has no "../" in it.
@@ -333,11 +336,21 @@ Item {
   }
 
   function cancelShutdown(why) {
-    var wasArmed = shutdownArmed
+    // capabilityWait runs after fireShutdown() has latched but before anything
+    // has actually been executed, and with graceSeconds 0 it is the only window
+    // there is. A cancel arriving then has to stop it, or the machine goes down
+    // anyway and the cancel silently did nothing.
+    var wasWaiting = capabilityWait.running
+    var wasArmed = shutdownArmed || wasWaiting
     shutdownArmed = false
     shutdownRemaining = 0
     shutdownConfirmations = 0
     graceTimer.stop()
+    capabilityWait.stop()
+    capabilityWait.waited = 0
+    // Nothing ran, so release the latch too, or a later outage would find
+    // shutdownFired still true and never act.
+    if (wasWaiting) shutdownFired = false
     if (wasArmed) notifySend("normal", "UPS shutdown cancelled", why)
     return wasArmed
   }
@@ -351,7 +364,7 @@ Item {
     // Only a definite "no" downgrades to a power off. While the probe is still
     // "unknown" the configured intent stands, so we neither mislabel the
     // pending action nor quietly discard a session that was meant to be saved.
-    return hibernateSupported === "no" ? "shutdown" : "hibernate"
+    return (hibernateSupported === "no" || hibernateProbeTimedOut) ? "shutdown" : "hibernate"
   }
 
   function fireShutdown() {
@@ -377,11 +390,31 @@ Item {
       Quickshell.execDetached(["bash", "-lc", shutdownCommand])
       return
     }
-    if (shutdownAction === "hibernate" && action === "shutdown")
-      notifySend("critical", "Hibernation unavailable - powering off instead",
-                 "logind reports hibernate unsupported on this machine.")
-    if (action === "hibernate") Quickshell.execDetached(["systemctl", "hibernate"])
+    if (shutdownAction === "hibernate" && action === "shutdown") {
+      if (hibernateProbeTimedOut)
+        notifySend("critical", "Could not confirm hibernation - powering off instead",
+                   "logind did not answer in time; powering off is the safe fallback.")
+      else
+        notifySend("critical", "Hibernation unavailable - powering off instead",
+                   "logind reports hibernate unsupported on this machine.")
+    }
+    // Run hibernate as a tracked process rather than detached: CanHibernate is
+    // logind's opinion, not a guarantee, and a hibernate that fails silently
+    // leaves the host running until the battery is flat -- the exact outcome
+    // this whole feature exists to avoid.
+    if (action === "hibernate") hibernateRunner.running = true
     else Quickshell.execDetached(["systemctl", "poweroff"])
+  }
+
+  Process {
+    id: hibernateRunner
+    command: ["systemctl", "hibernate"]
+    onExited: function (exitCode) {
+      if (exitCode === 0) return
+      root.notifySend("critical", "Hibernation failed - powering off instead",
+                      "systemctl hibernate exited " + exitCode)
+      Quickshell.execDetached(["systemctl", "poweroff"])
+    }
   }
 
   Timer {
@@ -391,14 +424,14 @@ Item {
     property int waited: 0
     onTriggered: {
       waited += interval
-      // Bounded: if the probe never answers, act rather than never shutting
-      // down. plannedAction() then resolves "unknown" the same way it always
-      // has, so the machine still goes down cleanly.
-      if (root.hibernateSupported !== "unknown" || waited >= 5000) {
-        stop()
-        waited = 0
-        root.performShutdown()
-      }
+      if (root.hibernateSupported === "unknown" && waited < 5000) return
+      // Bounded. On timeout we must not attempt the hibernate anyway: if it is
+      // in fact unavailable, systemctl fails, nothing happens, and the host
+      // sits there until the battery is flat. A power off is the safe fallback.
+      if (root.hibernateSupported === "unknown") root.hibernateProbeTimedOut = true
+      stop()
+      waited = 0
+      root.performShutdown()
     }
   }
 
@@ -457,6 +490,8 @@ Item {
         + " fired=" + root.shutdownFired
         + " suppressed=" + root.shutdownSuppressed
         + " hibernateSupported=" + root.hibernateSupported
+        + " probeTimedOut=" + root.hibernateProbeTimedOut
+        + " capabilityWait=" + capabilityWait.running
         + " conditionMet=" + root.shutdownConditionMet
         + (root.shutdownConditionMet ? " reason=" + root.shutdownReason : "")
     }
