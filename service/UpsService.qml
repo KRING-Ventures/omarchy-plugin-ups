@@ -267,15 +267,21 @@ Item {
     // Not for FSD though: that is a standing order to shut down regardless of
     // line status, so returning to mains must not cancel it.
     if (reachable && !onBattery && !shutdownPending) {
-      if (shutdownArmed) cancelShutdown("mains power restored")
+      // capabilityWait runs with shutdownArmed already false, so testing that
+      // alone would reset the state and leave the timer running -- and it would
+      // then power off a machine whose power had come back.
+      if (shutdownArmed || capabilityWait.running) cancelShutdown("mains power restored")
       shutdownConfirmations = 0
       shutdownFired = false
       shutdownSuppressed = false
       return
     }
 
-    // A manual cancel means "not during this outage".
-    if (shutdownSuppressed) {
+    // A manual cancel means "not during this outage" -- but it is a decision
+    // about our own inferred thresholds, not a veto over the UPS. An FSD
+    // arriving later in the same outage still has to be obeyed, or the UPS
+    // removes power with the host still running.
+    if (shutdownSuppressed && !shutdownPending) {
       shutdownConfirmations = 0
       return
     }
@@ -297,6 +303,7 @@ Item {
     // grace period still applies.
     if (shutdownPending) {
       shutdownConfirmations = shutdownConfirmPolls
+      shutdownSuppressed = false
       armShutdown()
       return
     }
@@ -408,7 +415,10 @@ Item {
 
   Process {
     id: hibernateRunner
-    command: ["systemctl", "hibernate"]
+    // --no-ask-password so a CanHibernate=challenge result cannot park this on a
+    // polkit prompt that nobody is there to answer during an outage. It then
+    // exits non-zero and onExited falls back to powering off.
+    command: ["systemctl", "--no-ask-password", "hibernate"]
     onExited: function (exitCode) {
       if (exitCode === 0) return
       root.notifySend("critical", "Hibernation failed - powering off instead",
@@ -458,7 +468,15 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        root.hibernateSupported = String(text || "").indexOf("yes") !== -1 ? "yes" : "no"
+        // busctl prints: s "yes" | "no" | "na" | "challenge". Match the quoted
+        // verdict rather than searching the whole string, so stray text cannot
+        // read as a yes.
+        var verdict = String(text || "").match(/"([a-z]+)"/)
+        var answer = verdict ? verdict[1] : ""
+        // "challenge" means hibernation is available but needs authorization,
+        // so it counts as supported; only no/na are refusals. An unparsable
+        // answer counts as unsupported rather than optimistic.
+        root.hibernateSupported = (answer === "yes" || answer === "challenge") ? "yes" : "no"
       }
     }
   }
