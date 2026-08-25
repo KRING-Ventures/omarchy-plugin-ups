@@ -95,8 +95,10 @@ Shut the machine down cleanly, or hibernate it, before the UPS battery runs out.
 | `confirmPolls` | `2` | Consecutive agreeing polls required before arming |
 | `graceSeconds` | `60` | Cancellable countdown. `0` acts immediately |
 
-The UPS's `FSD` flag (upsd explicitly commanding shutdown) always triggers,
-regardless of the thresholds.
+The UPS's `FSD` flag — upsd explicitly commanding a shutdown — always triggers,
+regardless of the thresholds, and it also **bypasses `confirmPolls`**: waiting
+`confirmPolls x interval` seconds to believe it could be most of the time the UPS
+had left. The grace period still applies.
 
 **Behaviour**
 

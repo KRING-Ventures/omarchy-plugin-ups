@@ -70,13 +70,12 @@ BarWidget {
 
   readonly property string tooltip: {
     if (!ready) return "UPS: starting up"
-    if (!reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText
-
     if (service.shutdownArmed)
       return "UPS: " + service.shutdownReason
         + "\n" + (service.plannedAction() === "hibernate" ? "Hibernating" : "Powering off")
         + " in " + fmtCountdown(service.shutdownRemaining)
         + "\nCancel: omarchy-shell omarchy-community.ups cancelShutdown"
+    if (!reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText
 
     var mfr = String(service.value("ups.mfr", "")).trim()
     var model = String(service.value("ups.model", "")).trim().replace(/_/g, " ")

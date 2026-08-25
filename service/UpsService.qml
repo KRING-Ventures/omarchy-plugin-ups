@@ -281,6 +281,16 @@ Item {
       return
     }
 
+    // FSD is upsd commanding a shutdown now, not a threshold we inferred, so it
+    // skips the debounce entirely: waiting confirmPolls x interval seconds to
+    // believe it could be most of the time the UPS had left. The configured
+    // grace period still applies.
+    if (shutdownPending) {
+      shutdownConfirmations = shutdownConfirmPolls
+      armShutdown()
+      return
+    }
+
     shutdownConfirmations = shutdownConfirmations + 1
     if (shutdownConfirmations >= shutdownConfirmPolls) armShutdown()
   }
