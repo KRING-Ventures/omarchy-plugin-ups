@@ -84,6 +84,17 @@ Set these on the widget's entry in `~/.config/omarchy/shell.json`:
 }
 ```
 
+## Disabling loses your settings
+
+`omarchy plugin disable <id>` removes the widget's entry from `shell.json`, and
+for a third-party plugin that entry *is* the record that it is enabled — so the
+inline settings go with it. Re-enabling gives you a bare entry and the widget
+falls back to looking for a `upsd` on `127.0.0.1`, which for a network UPS means
+it reports unreachable.
+
+This is how Omarchy tracks third-party plugins, not something this plugin can
+avoid. Note your `host` and `ups` before disabling, or keep a copy of the entry.
+
 ## Layout notes
 
 `kinds` is `["service", "bar-widget"]`. A bar widget is instantiated once per
