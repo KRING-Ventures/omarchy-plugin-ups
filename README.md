@@ -30,6 +30,20 @@ which is expected for a UPS on the network:
 `ups` can be omitted if the server serves only one. See Settings below for the
 rest.
 
+## Remove
+
+```bash
+omarchy plugin remove io.github.kring-ventures.ups
+```
+
+That deletes `~/.config/omarchy/plugins/io.github.kring-ventures.ups`, unloads
+the service from the running shell, and removes the widget's entry from
+`shell.json` — including your `host` and `ups` values, so note them first if you
+intend to reinstall.
+
+Nothing is left behind: the plugin writes no files outside its own directory,
+installs no system units, and holds no privileged state.
+
 ## Requirements
 
 None beyond bash. The poller (`ups-poll`) talks the NUT protocol directly over
