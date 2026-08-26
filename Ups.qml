@@ -8,7 +8,7 @@ BarWidget {
   id: root
   moduleName: "io.github.kring-ventures.ups"
 
-  readonly property var service: bar?.shell?.serviceFor("io.github.kring-ventures.ups")
+  readonly property var service: bar?.shell?.serviceFor(moduleName)
 
   // What the label shows on mains power: load | charge | runtime | power | none.
   // On battery this is overridden with runtime, which is the only number that
@@ -80,7 +80,7 @@ BarWidget {
       return "UPS: " + service.shutdownReason
         + "\n" + plannedVerb(service.plannedAction())
         + " in " + fmtCountdown(service.shutdownRemaining)
-        + "\nCancel: omarchy-shell omarchy-community.ups cancelShutdown"
+        + "\nCancel: omarchy-shell " + moduleName + " cancelShutdown"
     if (!reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText
 
     var mfr = String(service.value("ups.mfr", "")).trim()

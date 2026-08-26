@@ -72,7 +72,7 @@ Shut the machine down cleanly, or hibernate it, before the UPS battery runs out.
 
 ```json
 {
-  "id": "omarchy-community.ups",
+  "id": "io.github.kring-ventures.ups",
   "host": "192.168.1.50",
   "autoShutdown": {
     "enabled": true,
@@ -111,12 +111,12 @@ had left. The grace period still applies.
 - Mains power returning cancels an in-progress countdown and re-arms for a
   future outage.
 - Cancel by hand with
-  `omarchy-shell omarchy-community.ups cancelShutdown`. That suppresses
+  `omarchy-shell io.github.kring-ventures.ups cancelShutdown`. That suppresses
   auto-shutdown until mains power returns — otherwise the trigger is still true
   on the next poll and the countdown just starts again. Undo with
   `resumeAutoShutdown`.
 - Inspect the state machine any time with
-  `omarchy-shell omarchy-community.ups shutdownStatus`.
+  `omarchy-shell io.github.kring-ventures.ups shutdownStatus`.
 - `action: "hibernate"` is resolved against what logind actually reports for
   `CanHibernate`. On a machine that cannot hibernate (no swap large enough, no
   `resume=`) it powers off instead and says so, rather than silently doing

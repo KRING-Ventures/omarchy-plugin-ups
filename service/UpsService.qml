@@ -13,6 +13,12 @@ Item {
   property var shell: null
   property var manifest: null
 
+  // The plugin id, taken from the manifest rather than repeated as a literal.
+  // It is the IPC target, the shell.json key, and appears in user-facing cancel
+  // instructions; hardcoding it in each place let it drift on a rename.
+  readonly property string pluginId: manifest && manifest.id
+    ? String(manifest.id) : "io.github.kring-ventures.ups"
+
   // Configuration is pulled straight out of shell.json rather than pushed in by
   // the bar widget: the service can mount before any widget does, and a service
   // that quietly polls localhost because nobody pushed settings yet is worse
@@ -59,7 +65,7 @@ Item {
   // Our own layout entry, wherever the user put the widget.
   function findEntry(cfg) {
     if (!cfg) return null
-    var id = "io.github.kring-ventures.ups"
+    var id = pluginId
     var layout = cfg.bar && cfg.bar.layout ? cfg.bar.layout : null
     var sections = ["left", "center", "right"]
     for (var i = 0; layout && i < sections.length; i++) {
@@ -326,7 +332,7 @@ Item {
       return
     }
     notifySend("critical", verb + " in " + shutdownGraceSeconds + "s",
-               "UPS: " + shutdownReason + ". Cancel: omarchy-shell omarchy-community.ups cancelShutdown")
+               "UPS: " + shutdownReason + ". Cancel: omarchy-shell " + pluginId + " cancelShutdown")
     graceTimer.start()
   }
 
