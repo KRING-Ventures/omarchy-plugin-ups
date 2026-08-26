@@ -1,4 +1,4 @@
-# UPS (`omarchy-community.ups`)
+# UPS (`io.github.kring-ventures.ups`)
 
 Omarchy shell bar widget for any UPS served by [NUT](https://networkupstools.org/)
 (Network UPS Tools) — the same protocol WinNUT speaks on Windows. Works with a
@@ -74,7 +74,7 @@ Set these on the widget's entry in `~/.config/omarchy/shell.json`:
 
 ```json
 {
-  "id": "omarchy-community.ups",
+  "id": "io.github.kring-ventures.ups",
   "host": "192.168.1.50",
   "port": 3493,
   "ups": "myups",

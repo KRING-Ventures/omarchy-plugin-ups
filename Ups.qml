@@ -6,9 +6,9 @@ import qs.Ui
 // mounts exactly once regardless of how many monitors show this widget.
 BarWidget {
   id: root
-  moduleName: "omarchy-community.ups"
+  moduleName: "io.github.kring-ventures.ups"
 
-  readonly property var service: bar?.shell?.serviceFor("omarchy-community.ups")
+  readonly property var service: bar?.shell?.serviceFor("io.github.kring-ventures.ups")
 
   // What the label shows on mains power: load | charge | runtime | power | none.
   // On battery this is overridden with runtime, which is the only number that
