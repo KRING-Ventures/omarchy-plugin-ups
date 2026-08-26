@@ -59,7 +59,7 @@ Item {
   // Our own layout entry, wherever the user put the widget.
   function findEntry(cfg) {
     if (!cfg) return null
-    var id = "omarchy-community.ups"
+    var id = "io.github.kring-ventures.ups"
     var layout = cfg.bar && cfg.bar.layout ? cfg.bar.layout : null
     var sections = ["left", "center", "right"]
     for (var i = 0; layout && i < sections.length; i++) {
@@ -482,7 +482,7 @@ Item {
   }
 
   IpcHandler {
-    target: "omarchy-community.ups"
+    target: "io.github.kring-ventures.ups"
 
     function refresh(): void {
       root.refresh()

@@ -1,9 +1,10 @@
 {
   "schemaVersion": 1,
-  "id": "omarchy-community.ups",
+  "id": "io.github.kring-ventures.ups",
   "name": "UPS",
   "version": "1.1.0",
   "author": "KRING Ventures",
+  "license": "MIT",
   "description": "UPS status from a NUT (Network UPS Tools) server",
   "kinds": [
     "service",
