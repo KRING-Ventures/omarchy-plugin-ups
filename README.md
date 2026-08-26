@@ -9,10 +9,26 @@ hardware, such as the Ubiquiti UPS Tower.
 
 ```bash
 omarchy plugin add https://github.com/KRING-Ventures/omarchy-plugin-ups
+omarchy plugin enable io.github.kring-ventures.ups
 ```
 
-Then set `host` (and `ups`, if the server serves more than one) on the widget's
-entry in `~/.config/omarchy/shell.json` — see Settings below.
+`add` installs the plugin but leaves it disabled, so the `enable` step is not
+optional — it is what puts the widget on the bar.
+
+Enabling creates a bare entry in `~/.config/omarchy/shell.json`. Until you set
+`host`, the widget looks for a `upsd` on `127.0.0.1` and reports unreachable,
+which is expected for a UPS on the network:
+
+```json
+{
+  "id": "io.github.kring-ventures.ups",
+  "host": "192.168.1.50",
+  "ups": "myups"
+}
+```
+
+`ups` can be omitted if the server serves only one. See Settings below for the
+rest.
 
 ## Requirements
 
