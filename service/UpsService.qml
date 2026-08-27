@@ -62,6 +62,29 @@ Item {
   // Cancellable countdown once armed.
   readonly property int shutdownGraceSeconds: Math.max(0, Number(shutdownOption("graceSeconds", 60)))
 
+
+  // Auto-shutdown turns UPS status into `systemctl poweroff`, and ups-poll reads
+  // that status over plaintext NUT with no TLS and no server authentication.
+  // Anyone on the network path to a remote upsd can therefore forge OB LB or
+  // FSD and shut this host down -- and FSD deliberately skips the debounce. So
+  // a remote upsd may only drive a shutdown if the user says so explicitly.
+  // (upsmon, by contrast, negotiates STARTTLS; see README.)
+  readonly property bool shutdownAllowRemote: shutdownOption("allowRemote", false) === true
+
+  readonly property bool upsdIsLocal: {
+    var h = String(host).toLowerCase()
+    return h === "localhost" || h === "::1" || h === "[::1]" || /^127\./.test(h)
+  }
+
+  readonly property string shutdownBlockedReason: {
+    if (!autoShutdownEnabled) return ""
+    if (!upsdIsLocal && !shutdownAllowRemote)
+      return "upsd at " + host + " is remote; set autoShutdown.allowRemote to trust it"
+    return ""
+  }
+
+  // Configured on, and permitted to act.
+  readonly property bool shutdownArmable: autoShutdownEnabled && shutdownBlockedReason === ""
   // Our own layout entry, wherever the user put the widget.
   function findEntry(cfg) {
     if (!cfg) return null
@@ -109,6 +132,9 @@ Item {
   // poll and the countdown simply starts again a few seconds later, which makes
   // cancelling by hand useless. Cleared when mains power comes back.
   property bool shutdownSuppressed: false
+  // Set while the grace deadline has expired and we are waiting on one fresh
+  // poll to confirm the condition still holds.
+  property bool awaitingFinalPoll: false
   property string hibernateSupported: "unknown"   // yes | no | unknown
   // Distinct from a confirmed "no": logind never answered. Both fall back to a
   // power off, but they are different situations and say so.
@@ -167,7 +193,7 @@ Item {
   // Does the current reading warrant shutting down? Only ever true while we can
   // actually see the UPS and it is running on battery.
   readonly property bool shutdownConditionMet: {
-    if (!autoShutdownEnabled || !reachable) return false
+    if (!shutdownArmable || !reachable) return false
     // FSD is upsd explicitly commanding a shutdown; it is not advisory, and it
     // is not conditional on line status either. A primary can set FSD while the
     // UPS still reads OL (an admin running `upsmon -c fsd`, a scheduled or
@@ -263,7 +289,7 @@ Item {
   // ---- Auto-shutdown state machine ----
 
   function evaluateShutdown() {
-    if (!autoShutdownEnabled) {
+    if (!shutdownArmable) {
       if (shutdownArmed) cancelShutdown("auto-shutdown turned off")
       shutdownConfirmations = 0
       return
@@ -359,6 +385,8 @@ Item {
     shutdownRemaining = 0
     shutdownConfirmations = 0
     graceTimer.stop()
+    finalPollDeadline.stop()
+    awaitingFinalPoll = false
     capabilityWait.stop()
     capabilityWait.waited = 0
     // Nothing ran, so release the latch too, or a later outage would find
@@ -378,6 +406,17 @@ Item {
     // "unknown" the configured intent stands, so we neither mislabel the
     // pending action nor quietly discard a session that was meant to be saved.
     return (hibernateSupported === "no" || hibernateProbeTimedOut) ? "shutdown" : "hibernate"
+  }
+
+  // Mains power returning is only ever learned in the poll handler, so firing
+  // straight off the grace deadline can power off a host whose power came back
+  // moments earlier -- anywhere up to a whole poll interval of ignorance. Take
+  // one fresh reading first. ups-poll is deadline-bounded, so this cannot hang.
+  function requestFinalConfirmation() {
+    graceTimer.stop()
+    awaitingFinalPoll = true
+    finalPollDeadline.restart()
+    refresh()
   }
 
   function fireShutdown() {
@@ -452,6 +491,18 @@ Item {
   }
 
   Timer {
+    id: finalPollDeadline
+    interval: 8000
+    repeat: false
+    onTriggered: {
+      // No answer in time. We were on battery when we armed, so proceed rather
+      // than sit on a dying UPS waiting for a poll that is not coming.
+      root.awaitingFinalPoll = false
+      root.fireShutdown()
+    }
+  }
+
+  Timer {
     id: graceTimer
     interval: 1000
     repeat: true
@@ -461,7 +512,7 @@ Item {
       // still shows something before the machine goes.
       if (root.shutdownRemaining === 30 || root.shutdownRemaining === 10)
         root.notifySend("critical", "UPS shutdown in " + root.shutdownRemaining + "s", root.shutdownReason)
-      if (root.shutdownRemaining <= 0) root.fireShutdown()
+      if (root.shutdownRemaining <= 0) root.requestFinalConfirmation()
     }
   }
 
@@ -507,6 +558,8 @@ Item {
 
     function shutdownStatus(): string {
       if (!root.autoShutdownEnabled) return "auto-shutdown disabled"
+      if (root.shutdownBlockedReason !== "")
+        return "auto-shutdown blocked: " + root.shutdownBlockedReason
       return "action=" + root.plannedAction()
         + " armed=" + root.shutdownArmed
         + " remaining=" + root.shutdownRemaining
@@ -516,6 +569,7 @@ Item {
         + " hibernateSupported=" + root.hibernateSupported
         + " probeTimedOut=" + root.hibernateProbeTimedOut
         + " capabilityWait=" + capabilityWait.running
+        + " awaitingFinalPoll=" + root.awaitingFinalPoll
         + " conditionMet=" + root.shutdownConditionMet
         + (root.shutdownConditionMet ? " reason=" + root.shutdownReason : "")
     }
@@ -563,7 +617,17 @@ Item {
         root.lastReplaceBattery = root.replaceBattery
         root.lastOverloaded = root.overloaded
         root.primed = true
-        root.evaluateShutdown()
+
+        if (root.awaitingFinalPoll) {
+          root.awaitingFinalPoll = false
+          finalPollDeadline.stop()
+          if (root.reachable && !root.onBattery && !root.shutdownPending)
+            root.cancelShutdown("mains power restored")
+          else
+            root.fireShutdown()
+        } else {
+          root.evaluateShutdown()
+        }
       }
     }
   }

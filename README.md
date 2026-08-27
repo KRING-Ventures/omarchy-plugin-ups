@@ -94,11 +94,29 @@ Shut the machine down cleanly, or hibernate it, before the UPS battery runs out.
 | `onLowBattery` | `true` | Also act on the UPS's own `LB` flag, whatever the numbers say |
 | `confirmPolls` | `2` | Consecutive agreeing polls required before arming |
 | `graceSeconds` | `60` | Cancellable countdown. `0` acts immediately |
+| `allowRemote` | `false` | Required before a **remote** `upsd` may trigger a shutdown — see below |
 
 The UPS's `FSD` flag — upsd explicitly commanding a shutdown — always triggers,
 regardless of the thresholds, and it also **bypasses `confirmPolls`**: waiting
 `confirmPolls x interval` seconds to believe it could be most of the time the UPS
 had left. The grace period still applies.
+
+**Only a local `upsd` is trusted by default**
+
+`ups-poll` speaks plaintext NUT. It does not negotiate `STARTTLS` and does not
+authenticate the server. That is fine for reading a status line, but
+auto-shutdown turns that status into `systemctl poweroff` — so anyone able to
+sit on the network path to a remote `upsd` could forge `OB LB`, or `FSD` which
+skips the confirmation entirely, and shut the machine down.
+
+So auto-shutdown refuses to act on a remote `upsd` unless you set
+`allowRemote: true`. A `upsd` on loopback has no network path to forge. The
+widget still *displays* a remote UPS normally; only the destructive action is
+gated, and `shutdownStatus` says so when it is blocked.
+
+If you want unattended shutdown against a UPS on the network, NUT's own
+`upsmon` is the better answer regardless: it negotiates `STARTTLS` with servers
+that support it, and it runs as a system daemon rather than inside your session.
 
 **Behaviour**
 
@@ -110,6 +128,10 @@ had left. The grace period still applies.
   shows something.
 - Mains power returning cancels an in-progress countdown and re-arms for a
   future outage.
+- The grace deadline does not fire blind. Mains returning is only ever learned
+  from a poll, so the deadline triggers one fresh poll and acts only if the
+  condition still holds — otherwise a power cut that ended between polls could
+  still shut the machine down.
 - Cancel by hand with
   `omarchy-shell io.github.kring-ventures.ups cancelShutdown`. That suppresses
   auto-shutdown until mains power returns — otherwise the trigger is still true
