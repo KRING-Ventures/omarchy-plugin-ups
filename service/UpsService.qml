@@ -516,6 +516,16 @@ Item {
     onExited: function (exitCode) {
       if (exitCode === 0) return
       hibernateWatchdog.stop()
+      root.hibernateAttemptFailed = true
+      // Hibernate can fail after mains has already come back, and a poll may
+      // already have seen it. Powering off then would kill a recovered machine,
+      // so re-check before falling back -- the same rule the watchdog follows.
+      if (root.reachable && !root.shutdownConditionMet) {
+        root.shutdownFired = false
+        root.notifySend("normal", "Hibernation failed, but power is back",
+                        "Standing down instead of powering off.")
+        return
+      }
       root.notifySend("critical", "Hibernation failed - powering off instead",
                       "systemctl hibernate exited " + exitCode)
       Quickshell.execDetached(["systemctl", "poweroff"])
