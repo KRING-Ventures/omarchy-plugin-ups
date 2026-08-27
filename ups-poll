@@ -28,6 +28,27 @@ PORT="${2:-3493}"
 UPS="${3:-}"
 TIMEOUT=4
 
+# Explicit ceilings on what a server can make us hold. Without these the only
+# limit is time (TIMEOUT/DEADLINE below) interacting with how slowly bash reads,
+# which bounds a hostile response incidentally rather than on purpose -- and
+# would stop bounding it the moment those timeouts changed.
+# A real NUT reply is a few dozen short lines; these are far above that.
+MAX_LINE=4096          # longest single line we will hold
+MAX_RECORDS=512        # most VAR lines we will accept
+MAX_TOTAL=131072       # most accumulated value bytes we will accept
+MAX_READ=262144        # most bytes we will read at all, matched or not
+
+read_total=0
+
+# Counts every line we read, whatever it turns out to be, so junk that matches
+# no case is bounded too.
+count_read() {
+  read_total=$(( read_total + ${#1} + 1 ))
+  if (( read_total > MAX_READ )); then
+    emit_error "too much data from ${HOST}:${PORT} (over ${MAX_READ} bytes)"
+  fi
+}
+
 # Every diagnostic this script produces is returned as JSON on stdout, so bash's
 # own redirection chatter ("connect: Connection refused") is pure noise.
 exec 2>/dev/null
@@ -94,10 +115,16 @@ send() { printf '%s\n' "$1" >&3; }
 if [[ -z $UPS ]]; then
   send "LIST UPS"
   list_end=0
-  while IFS= read -r -t "$TIMEOUT" line <&3; do
+  listed=0
+  while IFS= read -r -t "$TIMEOUT" -n "$MAX_LINE" line <&3; do
     line=${line%$'\r'}
+    count_read "$line"
     case $line in
       "UPS "*)
+        listed=$(( listed + 1 ))
+        if (( listed > MAX_RECORDS )); then
+          emit_error "too many UPS entries from ${HOST}:${PORT} (over ${MAX_RECORDS})"
+        fi
         rest=${line#UPS }
         [[ -z $UPS ]] && UPS=${rest%% *}
         ;;
@@ -114,8 +141,11 @@ fi
 send "LIST VAR ${UPS}"
 vars=""
 got_end=0
-while IFS= read -r -t "$TIMEOUT" line <&3; do
+records=0
+total=0
+while IFS= read -r -t "$TIMEOUT" -n "$MAX_LINE" line <&3; do
   line=${line%$'\r'}
+  count_read "$line"
   case $line in
     "VAR "*)
       rest=${line#VAR }
@@ -127,6 +157,14 @@ while IFS= read -r -t "$TIMEOUT" line <&3; do
       # Undo NUT's backslash escaping before re-escaping for JSON.
       value=${value//\\\"/\"}
       value=${value//\\\\/\\}
+      records=$(( records + 1 ))
+      total=$(( total + ${#line} ))
+      if (( records > MAX_RECORDS )); then
+        emit_error "too many variables from ${HOST}:${PORT} (over ${MAX_RECORDS})"
+      fi
+      if (( total > MAX_TOTAL )); then
+        emit_error "response too large from ${HOST}:${PORT} (over ${MAX_TOTAL} bytes)"
+      fi
       [[ -n $vars ]] && vars+=","
       vars+="\"$(json_escape "$key")\":\"$(json_escape "$value")\""
       ;;
