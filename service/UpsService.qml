@@ -187,7 +187,7 @@ Item {
     if (overloaded) return "Overloaded"
     if (charging) return "Online, charging"
     if (onLine) return "Online"
-    return flags.length ? flags.join(" ") : "Unknown"
+    return flags.length ? safeText(flags.join(" "), 40) : "Unknown"
   }
 
   // The single most severe power condition, used for edge detection. Keyed on
@@ -226,6 +226,21 @@ Item {
     if (shutdownChargeBelow > 0 && charge >= 0 && charge <= shutdownChargeBelow)
       return Math.round(charge) + "% battery left"
     return "threshold reached"
+  }
+
+  // Everything below comes from the UPS, and the shell's tooltip renders with
+  // QML's default Text.AutoText, which interprets HTML -- so a hostile or
+  // compromised upsd could inject markup, including a remote <img> that would
+  // make the desktop fetch a URL. Strip what makes Qt treat a string as rich
+  // text, drop control characters, and cap the length so one huge value cannot
+  // take over the tooltip.
+  function safeText(raw, maxLength) {
+    var s = String(raw === undefined || raw === null ? "" : raw)
+    s = s.replace(/[<>&]/g, " ")
+    s = s.replace(/[\x00-\x1f\x7f]/g, " ")
+    var cap = maxLength === undefined ? 64 : maxLength
+    if (s.length > cap) s = s.substring(0, cap) + "\u2026"
+    return s
   }
 
   function value(key, fallback) {

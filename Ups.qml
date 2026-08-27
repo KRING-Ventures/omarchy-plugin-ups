@@ -87,12 +87,14 @@ BarWidget {
         + "\n" + plannedVerb(service.plannedAction())
         + " in " + fmtCountdown(service.shutdownRemaining)
         + "\nCancel: omarchy-shell " + moduleName + " cancelShutdown"
-    if (!service.reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText
+    if (!service.reachable)
+      return "UPS unreachable\n" + service.host + ":" + service.port
+        + "\n" + service.safeText(service.errorText, 120)
 
-    var mfr = String(service.value("ups.mfr", "")).trim()
-    var model = String(service.value("ups.model", "")).trim().replace(/_/g, " ")
+    var mfr = service.safeText(service.value("ups.mfr", ""), 32).trim()
+    var model = service.safeText(service.value("ups.model", ""), 40).trim().replace(/_/g, " ")
     var lines = []
-    lines.push((mfr + " " + model).trim() || ("UPS " + service.upsId))
+    lines.push((mfr + " " + model).trim() || ("UPS " + service.safeText(service.upsId, 32)))
     lines.push("Status:    " + service.statusLabel)
     if (service.charge >= 0) lines.push("Battery:   " + Math.round(service.charge) + "%")
     if (service.runtime >= 0) lines.push("Runtime:   " + service.fmtRuntime(service.runtime))
@@ -102,9 +104,9 @@ BarWidget {
     }
     if (service.inputVoltage >= 0) lines.push("Input:     " + service.inputVoltage.toFixed(1) + " V")
     if (service.temperature >= 0) lines.push("Temp:      " + service.temperature.toFixed(1) + " °C")
-    var test = String(service.value("ups.test.result", "")).trim()
+    var test = service.safeText(service.value("ups.test.result", ""), 40).trim()
     if (test !== "") {
-      var when = String(service.value("ups.test.date", "")).trim()
+      var when = service.safeText(service.value("ups.test.date", ""), 24).trim()
       lines.push("Self-test: " + test + (when !== "" ? " (" + when + ")" : ""))
     }
     return lines.join("\n")
