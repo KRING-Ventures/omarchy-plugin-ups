@@ -43,14 +43,20 @@ BarWidget {
   }
 
   readonly property string glyph: {
-    if (!reachable) return glyphOffline
+    // Guard on the service itself, not on `reachable`. `reachable` is a
+    // separate binding over the same service, and when the service is torn
+    // down (plugin reload, disable, shell shutdown) it can still hold a stale
+    // true while `service` is already null -- which threw here.
+    if (!ready) return glyphOffline
+    if (!service.reachable) return glyphOffline
     if (service.lowBattery || service.replaceBattery || service.shutdownPending) return glyphWarn
     if (service.onBattery) return batteryGlyph()
     return glyphPlug
   }
 
   readonly property string metricText: {
-    if (!reachable) return "UPS?"
+    if (!ready) return "UPS?"
+    if (!service.reachable) return "UPS?"
     if (service.onBattery) return service.fmtRuntime(service.runtime)
     switch (metric) {
     case "none": return ""
@@ -63,7 +69,7 @@ BarWidget {
 
   readonly property string tooltip: {
     if (!ready) return "UPS: starting up"
-    if (!reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText
+    if (!service.reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText
 
     var mfr = String(service.value("ups.mfr", "")).trim()
     var model = String(service.value("ups.model", "")).trim().replace(/_/g, " ")
