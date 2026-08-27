@@ -9,10 +9,40 @@ hardware, such as the Ubiquiti UPS Tower.
 
 ```bash
 omarchy plugin add https://github.com/KRING-Ventures/omarchy-plugin-ups
+omarchy plugin enable io.github.kring-ventures.ups
 ```
 
-Then set `host` (and `ups`, if the server serves more than one) on the widget's
-entry in `~/.config/omarchy/shell.json` — see Settings below.
+`add` installs the plugin but leaves it disabled, so the `enable` step is not
+optional — it is what puts the widget on the bar.
+
+Enabling creates a bare entry in `~/.config/omarchy/shell.json`. Until you set
+`host`, the widget looks for a `upsd` on `127.0.0.1` and reports unreachable,
+which is expected for a UPS on the network:
+
+```json
+{
+  "id": "io.github.kring-ventures.ups",
+  "host": "192.168.1.50",
+  "ups": "myups"
+}
+```
+
+`ups` can be omitted if the server serves only one. See Settings below for the
+rest.
+
+## Remove
+
+```bash
+omarchy plugin remove io.github.kring-ventures.ups
+```
+
+That deletes `~/.config/omarchy/plugins/io.github.kring-ventures.ups`, unloads
+the service from the running shell, and removes the widget's entry from
+`shell.json` — including your `host` and `ups` values, so note them first if you
+intend to reinstall.
+
+Nothing is left behind: the plugin writes no files outside its own directory,
+installs no system units, and holds no privileged state.
 
 ## Requirements
 
@@ -172,6 +202,17 @@ Set these on the widget's entry in `~/.config/omarchy/shell.json`:
   "notifications": true
 }
 ```
+
+## Disabling loses your settings
+
+`omarchy plugin disable <id>` removes the widget's entry from `shell.json`, and
+for a third-party plugin that entry *is* the record that it is enabled — so the
+inline settings go with it. Re-enabling gives you a bare entry and the widget
+falls back to looking for a `upsd` on `127.0.0.1`, which for a network UPS means
+it reports unreachable.
+
+This is how Omarchy tracks third-party plugins, not something this plugin can
+avoid. Note your `host` and `ups` before disabling, or keep a copy of the entry.
 
 ## Layout notes
 
