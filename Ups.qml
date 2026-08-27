@@ -54,16 +54,22 @@ BarWidget {
   }
 
   readonly property string glyph: {
-    if (ready && service.shutdownArmed) return glyphWarn
-    if (!reachable) return glyphOffline
+    // Guard on the service itself, not on `reachable`. `reachable` is a
+    // separate binding over the same service, and when the service is torn
+    // down (plugin reload, disable, shell shutdown) it can still hold a stale
+    // true while `service` is already null -- which threw here.
+    if (!ready) return glyphOffline
+    if (service.shutdownArmed) return glyphWarn
+    if (!service.reachable) return glyphOffline
     if (service.lowBattery || service.replaceBattery || service.shutdownPending) return glyphWarn
     if (service.onBattery) return batteryGlyph()
     return glyphPlug
   }
 
   readonly property string metricText: {
-    if (ready && service.shutdownArmed) return fmtCountdown(service.shutdownRemaining)
-    if (!reachable) return "UPS?"
+    if (!ready) return "UPS?"
+    if (service.shutdownArmed) return fmtCountdown(service.shutdownRemaining)
+    if (!service.reachable) return "UPS?"
     if (service.onBattery) return service.fmtRuntime(service.runtime)
     switch (metric) {
     case "none": return ""
@@ -81,7 +87,7 @@ BarWidget {
         + "\n" + plannedVerb(service.plannedAction())
         + " in " + fmtCountdown(service.shutdownRemaining)
         + "\nCancel: omarchy-shell " + moduleName + " cancelShutdown"
-    if (!reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText
+    if (!service.reachable) return "UPS unreachable\n" + service.host + ":" + service.port + "\n" + service.errorText
 
     var mfr = String(service.value("ups.mfr", "")).trim()
     var model = String(service.value("ups.model", "")).trim().replace(/_/g, " ")
