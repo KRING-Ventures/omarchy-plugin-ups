@@ -147,6 +147,9 @@ Item {
   // Distinct from a confirmed "no": logind never answered. Both fall back to a
   // power off, but they are different situations and say so.
   property bool hibernateProbeTimedOut: false
+  // Set when a hibernate we asked for demonstrably did not happen, so the next
+  // decision picks a power off instead of asking again.
+  property bool hibernateAttemptFailed: false
 
   // __sourceDir is the plugin root, which is where the helper lives. Preferred
   // over a relative resolvedUrl so the spawned command has no "../" in it.
@@ -317,6 +320,8 @@ Item {
       shutdownConfirmations = 0
       shutdownFired = false
       shutdownSuppressed = false
+      hibernateAttemptFailed = false
+      hibernateWatchdog.stop()
       return
     }
 
@@ -418,6 +423,7 @@ Item {
     // Only a definite "no" downgrades to a power off. While the probe is still
     // "unknown" the configured intent stands, so we neither mislabel the
     // pending action nor quietly discard a session that was meant to be saved.
+    if (hibernateAttemptFailed) return "shutdown"
     return (hibernateSupported === "no" || hibernateProbeTimedOut) ? "shutdown" : "hibernate"
   }
 
@@ -470,8 +476,35 @@ Item {
     // logind's opinion, not a guarantee, and a hibernate that fails silently
     // leaves the host running until the battery is flat -- the exact outcome
     // this whole feature exists to avoid.
-    if (action === "hibernate") hibernateRunner.running = true
+    if (action === "hibernate") {
+      hibernateRunner.running = true
+      hibernateWatchdog.restart()
+    }
     else Quickshell.execDetached(["systemctl", "poweroff"])
+  }
+
+  // `systemctl hibernate` returns once logind has enqueued the job, so a
+  // hibernate that is accepted and then fails never shows up in onExited below
+  // and the host would sit there until the battery is flat. --wait does not help:
+  // it is documented for start/restart, is-system-running and kill only, and is
+  // silently ignored for the sleep verbs. So watch the outcome instead: still
+  // being awake this much later means it did not happen.
+  //
+  // This deliberately does not power off by itself. It marks hibernate as failed
+  // and releases the latch, letting the normal path re-decide -- which re-checks
+  // the UPS first, so a machine that hibernated, resumed and found mains back is
+  // not powered off by a timer that was frozen mid-hibernate.
+  Timer {
+    id: hibernateWatchdog
+    interval: 120000
+    repeat: false
+    onTriggered: {
+      if (!root.shutdownFired) return
+      root.hibernateAttemptFailed = true
+      root.shutdownFired = false
+      root.notifySend("critical", "Hibernation did not take effect",
+                      "Re-checking the UPS; will power off instead if still critical.")
+    }
   }
 
   Process {
@@ -482,6 +515,7 @@ Item {
     command: ["systemctl", "--no-ask-password", "hibernate"]
     onExited: function (exitCode) {
       if (exitCode === 0) return
+      hibernateWatchdog.stop()
       root.notifySend("critical", "Hibernation failed - powering off instead",
                       "systemctl hibernate exited " + exitCode)
       Quickshell.execDetached(["systemctl", "poweroff"])
@@ -603,6 +637,7 @@ Item {
         + " suppressed=" + root.shutdownSuppressed
         + " hibernateSupported=" + root.hibernateSupported
         + " probeTimedOut=" + root.hibernateProbeTimedOut
+        + " hibernateFailed=" + root.hibernateAttemptFailed
         + " capabilityWait=" + capabilityWait.running
         + " awaitingFinalPoll=" + root.awaitingFinalPoll
         + " needsFreshRead=" + root.finalPollNeedsFreshRead
