@@ -30,6 +30,15 @@ which is expected for a UPS on the network:
 `ups` can be omitted if the server serves only one. See Settings below for the
 rest.
 
+### If you installed before 2026-08-26
+
+The plugin id was briefly `omarchy-community.ups` before moving to the
+reverse-domain form the marketplace expects. If your `shell.json` still names
+the old id the widget will not appear at all, because Omarchy matches layout
+entries against installed plugin ids — so the plugin is never enabled and none
+of its settings are read. Change the `id` on that entry to
+`io.github.kring-ventures.ups` and keep your other settings.
+
 ## Remove
 
 ```bash
@@ -87,6 +96,95 @@ instead of refusing them would otherwise block for the kernel's SYN timeout —
 over two minutes — during which the shell counts the poller as still running and
 skips every later poll. Truncated replies (a list with no terminator) are
 reported as errors rather than parsed as if complete.
+
+## Auto-shutdown (opt-in)
+
+Shut the machine down cleanly, or hibernate it, before the UPS battery runs out.
+**Disabled by default** and it must be turned on explicitly.
+
+> **Read this first.** This runs inside the Omarchy shell, which is a user
+> session process. It is therefore *not* running when you most need it: machine
+> asleep, logged out, session crashed, or this plugin itself erroring. For an
+> unattended outage, use NUT's own `upsmon` — a system daemon that runs as root,
+> survives logout, and executes `SHUTDOWNCMD` on `LB`/`FSD`. Treat this feature
+> as the visible, cancellable convenience layer, not as your safety net.
+
+```json
+{
+  "id": "io.github.kring-ventures.ups",
+  "host": "192.168.1.50",
+  "autoShutdown": {
+    "enabled": true,
+    "action": "shutdown",
+    "runtimeBelow": 300,
+    "confirmPolls": 2,
+    "graceSeconds": 60
+  }
+}
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `false` | Must be `true` for any of this to happen |
+| `action` | `shutdown` | `shutdown` or `hibernate` |
+| `command` | `""` | Run this instead of `systemctl`. Also how you test the feature without powering the machine off |
+| `runtimeBelow` | `300` | Act at or below this many seconds of remaining runtime. `0` disables this trigger |
+| `chargeBelow` | `0` | Act at or below this battery percentage. `0` disables this trigger |
+| `onLowBattery` | `true` | Also act on the UPS's own `LB` flag, whatever the numbers say |
+| `confirmPolls` | `2` | Consecutive agreeing polls required before arming |
+| `graceSeconds` | `60` | Cancellable countdown. `0` acts immediately |
+| `allowRemote` | `false` | Required before a **remote** `upsd` may trigger a shutdown — see below |
+
+The UPS's `FSD` flag — upsd explicitly commanding a shutdown — always triggers,
+regardless of the thresholds, and it also **bypasses `confirmPolls`**: waiting
+`confirmPolls x interval` seconds to believe it could be most of the time the UPS
+had left. The grace period still applies.
+
+**Only a local `upsd` is trusted by default**
+
+`ups-poll` speaks plaintext NUT. It does not negotiate `STARTTLS` and does not
+authenticate the server. That is fine for reading a status line, but
+auto-shutdown turns that status into `systemctl poweroff` — so anyone able to
+sit on the network path to a remote `upsd` could forge `OB LB`, or `FSD` which
+skips the confirmation entirely, and shut the machine down.
+
+So auto-shutdown refuses to act on a remote `upsd` unless you set
+`allowRemote: true`. A `upsd` on loopback has no network path to forge. The
+widget still *displays* a remote UPS normally; only the destructive action is
+gated, and `shutdownStatus` says so when it is blocked.
+
+If you want unattended shutdown against a UPS on the network, NUT's own
+`upsmon` is the better answer regardless: it negotiates `STARTTLS` with servers
+that support it, and it runs as a system daemon rather than inside your session.
+
+**Behaviour**
+
+- Only ever arms while the UPS is reachable *and* running on battery.
+- `confirmPolls` exists because a single spurious `battery.runtime` of 0 must
+  never power the machine off. The count resets the moment a reading disagrees.
+- While armed, the bar shows a warning glyph and a live countdown, and warnings
+  are re-sent at 30s and 10s so a screen that was locked when it armed still
+  shows something.
+- Mains power returning cancels an in-progress countdown and re-arms for a
+  future outage.
+- The grace deadline does not fire blind. Mains returning is only ever learned
+  from a poll, so the deadline triggers one fresh poll and acts only if the
+  condition still holds — otherwise a power cut that ended between polls could
+  still shut the machine down.
+- Cancel by hand with
+  `omarchy-shell io.github.kring-ventures.ups cancelShutdown`. That suppresses
+  auto-shutdown until mains power returns — otherwise the trigger is still true
+  on the next poll and the countdown just starts again. Undo with
+  `resumeAutoShutdown`.
+- Inspect the state machine any time with
+  `omarchy-shell io.github.kring-ventures.ups shutdownStatus`.
+- `action: "hibernate"` is resolved against what logind actually reports for
+  `CanHibernate`. On a machine that cannot hibernate (no swap large enough, no
+  `resume=`) it powers off instead and says so, rather than silently doing
+  nothing.
+- If upsd becomes unreachable *while a countdown is already running*, the
+  countdown continues. A network blip and a dead UPS are indistinguishable from
+  here, and shutting down cleanly is the safer of the two mistakes.
 
 ## Settings
 

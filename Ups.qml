@@ -8,7 +8,7 @@ BarWidget {
   id: root
   moduleName: "io.github.kring-ventures.ups"
 
-  readonly property var service: bar?.shell?.serviceFor("io.github.kring-ventures.ups")
+  readonly property var service: bar?.shell?.serviceFor(moduleName)
 
   // What the label shows on mains power: load | charge | runtime | power | none.
   // On battery this is overridden with runtime, which is the only number that
@@ -32,6 +32,17 @@ BarWidget {
     ""  // full
   ]
 
+  function plannedVerb(action) {
+    if (action === "hibernate") return "Hibernating"
+    if (action === "command") return "Running command"
+    return "Powering off"
+  }
+
+  function fmtCountdown(seconds) {
+    var s = Math.max(0, seconds)
+    return Math.floor(s / 60) + ":" + (s % 60 < 10 ? "0" : "") + (s % 60)
+  }
+
   function batteryGlyph() {
     var charge = service.charge
     if (charge < 0) return batteryGlyphs[0]
@@ -48,6 +59,7 @@ BarWidget {
     // down (plugin reload, disable, shell shutdown) it can still hold a stale
     // true while `service` is already null -- which threw here.
     if (!ready) return glyphOffline
+    if (service.shutdownArmed) return glyphWarn
     if (!service.reachable) return glyphOffline
     if (service.lowBattery || service.replaceBattery || service.shutdownPending) return glyphWarn
     if (service.onBattery) return batteryGlyph()
@@ -56,6 +68,7 @@ BarWidget {
 
   readonly property string metricText: {
     if (!ready) return "UPS?"
+    if (service.shutdownArmed) return fmtCountdown(service.shutdownRemaining)
     if (!service.reachable) return "UPS?"
     if (service.onBattery) return service.fmtRuntime(service.runtime)
     switch (metric) {
@@ -69,6 +82,11 @@ BarWidget {
 
   readonly property string tooltip: {
     if (!ready) return "UPS: starting up"
+    if (service.shutdownArmed)
+      return "UPS: " + service.shutdownReason
+        + "\n" + plannedVerb(service.plannedAction())
+        + " in " + fmtCountdown(service.shutdownRemaining)
+        + "\nCancel: omarchy-shell " + moduleName + " cancelShutdown"
     if (!service.reachable)
       return "UPS unreachable\n" + service.host + ":" + service.port
         + "\n" + service.safeText(service.errorText, 120)
@@ -104,7 +122,7 @@ BarWidget {
     bar: root.bar
     text: root.metricText === "" ? root.glyph : root.glyph + "  " + root.metricText
     fontSize: Style.font.bodySmall
-    active: root.ready && root.service.alarming
+    active: root.ready && (root.service.alarming || root.service.shutdownArmed)
     dimmed: !root.reachable
     tooltipText: root.tooltip
 
