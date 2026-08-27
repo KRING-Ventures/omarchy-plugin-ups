@@ -139,6 +139,10 @@ Item {
   // Set while the grace deadline has expired and we are waiting on one fresh
   // poll to confirm the condition still holds.
   property bool awaitingFinalPoll: false
+  // A poll already in flight may have been started before mains returned, so it
+  // cannot serve as the confirmation. When that happens we let it land, ignore
+  // it, and start a read of our own.
+  property bool finalPollNeedsFreshRead: false
   property string hibernateSupported: "unknown"   // yes | no | unknown
   // Distinct from a confirmed "no": logind never answered. Both fall back to a
   // power off, but they are different situations and say so.
@@ -294,7 +298,10 @@ Item {
 
   function evaluateShutdown() {
     if (!shutdownArmable) {
-      if (shutdownArmed) cancelShutdown("auto-shutdown turned off")
+      // capabilityWait runs with shutdownArmed already false, so testing that
+      // alone lets a config change (turning this off, or the remote gate
+      // closing) leave the timer running and still power the machine off.
+      if (shutdownArmed || capabilityWait.running) cancelShutdown("auto-shutdown turned off")
       shutdownConfirmations = 0
       return
     }
@@ -390,7 +397,9 @@ Item {
     shutdownConfirmations = 0
     graceTimer.stop()
     finalPollDeadline.stop()
+    freshReadKick.stop()
     awaitingFinalPoll = false
+    finalPollNeedsFreshRead = false
     capabilityWait.stop()
     capabilityWait.waited = 0
     // Nothing ran, so release the latch too, or a later outage would find
@@ -420,7 +429,10 @@ Item {
     graceTimer.stop()
     awaitingFinalPoll = true
     finalPollDeadline.restart()
-    refresh()
+    // refresh() is a no-op while a poll is running, so without this the stale
+    // in-flight result would be accepted as confirmation.
+    if (poller.running) finalPollNeedsFreshRead = true
+    else refresh()
   }
 
   function fireShutdown() {
@@ -491,6 +503,22 @@ Item {
       stop()
       waited = 0
       root.performShutdown()
+    }
+  }
+
+  Timer {
+    id: freshReadKick
+    interval: 150
+    repeat: false
+    // Deferred because poller.running can still be true inside
+    // onStreamFinished, which would make refresh() a no-op again.
+    onTriggered: {
+      // Give the confirming read its own budget. ups-poll is bounded at 6s, so
+      // measuring the fallback from the original deadline could let it expire
+      // while the read we are actually waiting for is still in flight -- and
+      // fire the very shutdown this confirmation exists to prevent.
+      finalPollDeadline.restart()
+      root.refresh()
     }
   }
 
@@ -577,6 +605,7 @@ Item {
         + " probeTimedOut=" + root.hibernateProbeTimedOut
         + " capabilityWait=" + capabilityWait.running
         + " awaitingFinalPoll=" + root.awaitingFinalPoll
+        + " needsFreshRead=" + root.finalPollNeedsFreshRead
         + " conditionMet=" + root.shutdownConditionMet
         + (root.shutdownConditionMet ? " reason=" + root.shutdownReason : "")
     }
@@ -625,7 +654,12 @@ Item {
         root.lastOverloaded = root.overloaded
         root.primed = true
 
-        if (root.awaitingFinalPoll) {
+        if (root.awaitingFinalPoll && root.finalPollNeedsFreshRead) {
+          // This is the read that was already in flight. Discard it and start
+          // one that definitely began after the deadline.
+          root.finalPollNeedsFreshRead = false
+          freshReadKick.restart()
+        } else if (root.awaitingFinalPoll) {
           root.awaitingFinalPoll = false
           finalPollDeadline.stop()
           // Any reason the condition no longer holds is a reason not to fire,
