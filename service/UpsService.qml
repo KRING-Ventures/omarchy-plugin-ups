@@ -543,7 +543,10 @@ Item {
   }
 
   IpcHandler {
-    target: "io.github.kring-ventures.ups"
+    // Bound, not hardcoded: the cancel instruction shown in notifications is
+    // built from pluginId, so a fork that renames the id in manifest.json would
+    // otherwise print a command targeting a handler that does not exist.
+    target: root.pluginId
 
     function refresh(): void {
       root.refresh()
