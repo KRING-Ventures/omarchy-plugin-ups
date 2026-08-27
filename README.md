@@ -30,6 +30,15 @@ which is expected for a UPS on the network:
 `ups` can be omitted if the server serves only one. See Settings below for the
 rest.
 
+### If you installed before 2026-08-26
+
+The plugin id was briefly `omarchy-community.ups` before moving to the
+reverse-domain form the marketplace expects. If your `shell.json` still names
+the old id the widget will not appear at all, because Omarchy matches layout
+entries against installed plugin ids — so the plugin is never enabled and none
+of its settings are read. Change the `id` on that entry to
+`io.github.kring-ventures.ups` and keep your other settings.
+
 ## Remove
 
 ```bash
