@@ -73,7 +73,11 @@ Item {
 
   readonly property bool upsdIsLocal: {
     var h = String(host).toLowerCase()
-    return h === "localhost" || h === "::1" || h === "[::1]" || /^127\./.test(h)
+    // Must be a complete numeric 127.x.x.x literal. An unanchored /^127\./
+    // also matched DNS names like "127.example.test", which could resolve
+    // anywhere and so walk straight through the gate below.
+    var loopbackV4 = /^127\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$/
+    return h === "localhost" || h === "::1" || h === "[::1]" || loopbackV4.test(h)
   }
 
   readonly property string shutdownBlockedReason: {
@@ -621,8 +625,13 @@ Item {
         if (root.awaitingFinalPoll) {
           root.awaitingFinalPoll = false
           finalPollDeadline.stop()
-          if (root.reachable && !root.onBattery && !root.shutdownPending)
-            root.cancelShutdown("mains power restored")
+          // Any reason the condition no longer holds is a reason not to fire,
+          // not just mains returning: runtime can climb back over the
+          // threshold, or LB can clear, while still on battery. Unreachable
+          // deliberately falls through to firing, as before.
+          if (root.reachable && !root.shutdownConditionMet)
+            root.cancelShutdown(root.onBattery ? "shutdown condition cleared"
+                                              : "mains power restored")
           else
             root.fireShutdown()
         } else {
