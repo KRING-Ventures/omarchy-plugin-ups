@@ -101,6 +101,9 @@ Set these on the widget's entry in `~/.config/omarchy/shell.json`:
 | `display`       | `load`        | Mains-power metric: `load`, `charge`, `runtime`, `power`, `none` |
 | `notifications` | `true`        | Notify on state changes                              |
 | `hideWhenOnline`| `false`       | Only show the widget when something is wrong         |
+| `username`      | `""`          | Log in to `upsd` as this user; empty reads anonymously |
+| `passwordFile`  | `""`          | File whose first line is the password (`~` allowed)  |
+| `password`      | `""`          | The password itself, if no `passwordFile` is set     |
 
 ```json
 {
@@ -113,6 +116,33 @@ Set these on the widget's entry in `~/.config/omarchy/shell.json`:
   "notifications": true
 }
 ```
+
+### Servers that require a login
+
+Some servers refuse anonymous reads, and the widget shows
+`upsd: ACCESS-DENIED`. UniFi UPS devices do this when "Login Credential" is
+turned on. Set `username` and give the password, preferably in a file that only
+you can read, so it stays out of `shell.json` (which often lives in a dotfiles
+repo):
+
+```bash
+install -m 600 /dev/null ~/.config/omarchy/ups-password
+"$EDITOR" ~/.config/omarchy/ups-password   # put the password on the first line
+```
+
+```json
+{
+  "id": "io.github.kring-ventures.ups",
+  "host": "192.168.1.50",
+  "ups": "myups",
+  "username": "upsmon",
+  "passwordFile": "~/.config/omarchy/ups-password"
+}
+```
+
+The poller gets the credentials through its environment, so they never appear
+in `ps`. It speaks plain TCP, so the password crosses your LAN unencrypted,
+just as it does for NUT's own clients unless they are set up for TLS.
 
 ## Disabling loses your settings
 
