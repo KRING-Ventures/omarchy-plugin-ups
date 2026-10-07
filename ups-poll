@@ -7,6 +7,13 @@
 # Usage: ups-poll [host] [port] [upsname]
 #   upsname empty => auto-detect the first UPS the server advertises.
 #
+# Optional login, for servers that refuse anonymous reads (UniFi's "Login
+# Credential", for one). Taken from the environment rather than argv so the
+# password never shows up in `ps`:
+#   UPS_USERNAME        log in as this user before reading
+#   UPS_PASSWORD_FILE   read the password from the first line of this file
+#   UPS_PASSWORD        or take it directly (used when no file is given)
+#
 # Always exits 0 and always prints exactly one JSON object, so the caller only
 # ever parses one shape:
 #   {"ok":true,"name":"...","vars":{...}}
@@ -109,6 +116,49 @@ if ! exec 3<>"/dev/tcp/${HOST}/${PORT}" 2>/dev/null; then
 fi
 
 send() { printf '%s\n' "$1" >&3; }
+
+# NUT quotes an argument with "..." and backslash-escapes \ and " inside it.
+nut_quote() {
+  local s=${1//\\/\\\\}
+  s=${s//\"/\\\"}
+  printf '"%s"' "$s"
+}
+
+# Each login command answers with a single OK or ERR line.
+expect_ok() {
+  local line
+  IFS= read -r -t "$TIMEOUT" -n "$MAX_LINE" line <&3 \
+    || emit_error "no reply to $1 from ${HOST}:${PORT}"
+  line=${line%$'\r'}
+  count_read "$line"
+  case $line in
+    "OK"*) ;;
+    "ERR "*) emit_error "upsd rejected $1: ${line#ERR }" ;;
+    *) emit_error "unexpected reply to $1 from ${HOST}:${PORT}" ;;
+  esac
+}
+
+USERNAME=${UPS_USERNAME:-}
+if [[ -n $USERNAME ]]; then
+  PASSWORD=${UPS_PASSWORD:-}
+  if [[ -n ${UPS_PASSWORD_FILE:-} ]]; then
+    pwfile=${UPS_PASSWORD_FILE/#\~/$HOME}
+    # Cleared first: a missing file must fail, not fall back to UPS_PASSWORD.
+    PASSWORD=""
+    IFS= read -r PASSWORD < "$pwfile" \
+      || [[ -n $PASSWORD ]] \
+      || emit_error "cannot read password file ${UPS_PASSWORD_FILE}"
+    PASSWORD=${PASSWORD%$'\r'}
+  fi
+  # A newline would end the command early and let the rest run as a second one.
+  if [[ $USERNAME == *[$'\n\r']* || $PASSWORD == *[$'\n\r']* ]]; then
+    emit_error "username or password contains a line break"
+  fi
+  send "USERNAME $(nut_quote "$USERNAME")"
+  expect_ok USERNAME
+  send "PASSWORD $(nut_quote "$PASSWORD")"
+  expect_ok PASSWORD
+fi
 
 # Read to the end of the list even once we have what we want: leaving unread
 # lines in the socket would corrupt the next reply we parse.

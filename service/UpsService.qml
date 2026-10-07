@@ -23,6 +23,10 @@ Item {
   readonly property string host: String(entryValue("host", "127.0.0.1"))
   readonly property int port: Number(entryValue("port", 3493))
   readonly property string upsName: String(entryValue("ups", ""))
+  // Optional upsd login, for servers that refuse anonymous reads.
+  readonly property string username: String(entryValue("username", ""))
+  readonly property string password: String(entryValue("password", ""))
+  readonly property string passwordFile: String(entryValue("passwordFile", ""))
   readonly property int intervalSeconds: Math.max(2, Number(entryValue("interval", 10)))
   readonly property bool notifyChanges: entryValue("notifications", true) === true
 
@@ -218,6 +222,13 @@ Item {
   Process {
     id: poller
     command: ["bash", root.helperPath, root.host, String(root.port), root.upsName]
+    // Credentials go through the environment, not argv, so `ps` cannot show
+    // them. Always set, even empty, so nothing leaks in from the shell's own.
+    environment: ({
+      UPS_USERNAME: root.username,
+      UPS_PASSWORD: root.password,
+      UPS_PASSWORD_FILE: root.passwordFile
+    })
 
     stdout: StdioCollector {
       waitForEnd: true
